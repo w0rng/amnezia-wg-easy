@@ -1,14 +1,13 @@
-volumes:
-  etc_wireguard:
-
 services:
   amnezia-wg-easy:
     env_file:
       - .env
-    image: ghcr.io/w0rng/amnezia-wg-easy
+    build: .
+    image: aeantipov/amnezia-wg-easy-arm
     container_name: amnezia-wg-easy
     volumes:
-      - etc_wireguard:/etc/wireguard
+      - ./wireguard:/etc/wireguard
+      - ./wireguard:/etc/amnezia/amneziawg
     ports:
       - "${WG_PORT}:${WG_PORT}/udp"
       - "${PORT}:${PORT}/tcp"

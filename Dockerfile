@@ -1,9 +1,9 @@
 # As a workaround we have to build on nodejs 18
 # nodejs 20 hangs on build with armv6/armv7
-FROM docker.io/library/node:18-alpine AS build_node_modules
+FROM docker.io/library/node:20-alpine AS build_node_modules
 
 # Update npm to latest
-RUN npm install -g npm@latest
+RUN rm -rf node_modules && npm cache clean -f && npm install -g npm@latest
 
 # Copy Web UI
 COPY src /app
@@ -13,7 +13,7 @@ RUN npm ci --omit=dev &&\
 
 # Copy build result to a new image.
 # This saves a lot of disk space.
-FROM amneziavpn/amnezia-wg:latest
+FROM aeantipov/amneziawg-go-arm:latest
 HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show | /bin/grep -q interface || exit 1" --interval=1m --timeout=5s --retries=3
 COPY --from=build_node_modules /app /app
 
@@ -34,7 +34,7 @@ RUN chmod +x /bin/wgpw
 RUN apk add --no-cache \
     dpkg \
     dumb-init \
-    iptables \
+    iptables-legacy \
     nodejs \
     npm
 

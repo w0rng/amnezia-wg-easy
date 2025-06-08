@@ -89,8 +89,8 @@ module.exports = class WireGuard {
       const config = await this.__buildConfig();
 
       await this.__saveConfig(config);
-      await Util.exec('wg-quick down wg0').catch(() => {});
-      await Util.exec('wg-quick up wg0').catch((err) => {
+      await Util.exec('awg-quick down /etc/wireguard/wg0.conf').catch(() => {});
+      await Util.exec('awg-quick up /etc/wireguard/wg0.conf').catch((err) => {
         if (err && err.message && err.message.includes('Cannot find device "wg0"')) {
           throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
         }
@@ -162,7 +162,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 
   async __syncConfig() {
     debug('Config syncing...');
-    await Util.exec('wg syncconf wg0 <(wg-quick strip wg0)');
+    await Util.exec('wg syncconf wg0 <(wg-quick strip /etc/wireguard/wg0.conf)');
     debug('Config synced.');
   }
 

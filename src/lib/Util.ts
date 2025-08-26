@@ -1,15 +1,14 @@
 'use strict';
 
-const childProcess = require('child_process');
+import * as childProcess from 'child_process';
 
-module.exports = class Util {
+export default class Util {
 
-  static isValidIPv4(str) {
+  static isValidIPv4(str: string) {
     const blocks = str.split('.');
     if (blocks.length !== 4) return false;
-
-    for (let value of blocks) {
-      value = parseInt(value, 10);
+    for (const block of blocks) {
+      const value = parseInt(block, 10);
       if (Number.isNaN(value)) return false;
       if (value < 0 || value > 255) return false;
     }
@@ -17,9 +16,9 @@ module.exports = class Util {
     return true;
   }
 
-  static promisify(fn) {
+  static promisify(fn: any) {
     // eslint-disable-next-line func-names
-    return function(req, res) {
+    return function (req: any, res: any) {
       Promise.resolve().then(async () => fn(req, res))
         .then((result) => {
           if (res.headersSent) return;
@@ -52,17 +51,9 @@ module.exports = class Util {
     };
   }
 
-  static async exec(cmd, {
-    log = true,
-  } = {}) {
-    if (typeof log === 'string') {
-      // eslint-disable-next-line no-console
-      console.log(`$ ${log}`);
-    } else if (log === true) {
-      // eslint-disable-next-line no-console
-      console.log(`$ ${cmd}`);
-    }
-
+  static async exec(cmd: string, {log}: { log: string | undefined } = {log: undefined}): Promise<string> {
+    if (log) console.log(log);
+    else console.log(cmd);
     if (process.platform !== 'linux') {
       return '';
     }
@@ -72,9 +63,10 @@ module.exports = class Util {
         shell: 'bash',
       }, (err, stdout) => {
         if (err) return reject(err);
+        console.log(stdout);
         return resolve(String(stdout).trim());
       });
     });
   }
 
-};
+}

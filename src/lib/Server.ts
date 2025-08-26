@@ -1,16 +1,16 @@
 'use strict';
 
-const bcrypt = require('bcryptjs');
-const crypto = require('node:crypto');
-const basicAuth = require('basic-auth');
-const { createServer } = require('node:http');
-const { stat, readFile } = require('node:fs/promises');
-const { resolve, sep } = require('node:path');
+import bcrypt from'bcryptjs';
+import crypto from 'node:crypto';
+import basicAuth from'basic-auth';
+import { createServer } from'node:http';
+import { stat, readFile } from'node:fs/promises';
+import { resolve, sep } from'node:path';
 
-const expressSession = require('express-session');
-const debug = require('debug')('Server');
+import expressSession from'express-session';
+import debug from'debug';
 
-const {
+import {
   createApp,
   createError,
   createRouter,
@@ -20,12 +20,10 @@ const {
   toNodeListener,
   readBody,
   setHeader,
-  serveStatic,
-} = require('h3');
+  serveStatic, App,
+} from 'h3';
 
-const WireGuard = require('../services/WireGuard');
-
-const {
+import {
   PORT,
   WEBUI_HOST,
   RELEASE,
@@ -41,23 +39,25 @@ const {
   PROMETHEUS_METRICS_PASSWORD,
   DICEBEAR_TYPE,
   USE_GRAVATAR,
-} = require('../config');
+} from'@/config';
+import WireGuard from "@/services/WireGuard";
+import {IncomingMessage, ServerResponse} from "node-mock-http";
+import {string} from "postcss-selector-parser";
 
+const log = debug('Server');
 const requiresPassword = !!PASSWORD_HASH;
 const requiresPrometheusPassword = !!PROMETHEUS_METRICS_PASSWORD;
-
+export const wireGuard = new WireGuard();
 /**
  * Checks if `password` matches the PASSWORD_HASH.
  *
  * If environment variable is not set, the password is always invalid.
  *
  * @param {string} password String to test
+ * @param hash
  * @returns {boolean} true if matching environment, otherwise false
  */
-const isPasswordValid = (password, hash) => {
-  if (typeof password !== 'string') {
-    return false;
-  }
+const isPasswordValid = (password: string, hash: string): boolean => {
   if (hash) {
     return bcrypt.compareSync(password, hash);
   }
@@ -66,21 +66,26 @@ const isPasswordValid = (password, hash) => {
 };
 
 const cronJobEveryMinute = async () => {
-  await WireGuard.cronJobEveryMinute();
+  await wireGuard.cronJobEveryMinute();
   setTimeout(cronJobEveryMinute, 60 * 1000);
 };
 
-module.exports = class Server {
+export class Server {
+  private app: App;
 
   constructor() {
     const app = createApp();
     this.app = app;
 
-    app.use(fromNodeMiddleware(expressSession({
-      secret: crypto.randomBytes(256).toString('hex'),
-      resave: true,
-      saveUninitialized: true,
-    })));
+    app.use(
+      fromNodeMiddleware(
+        expressSession({
+          secret: crypto.randomBytes(256).toString('hex'),
+          resave: true,
+          saveUninitialized: true,
+        }) as unknown as (req: any, res: any, next: (err?: any) => void) => void
+      )
+    );
 
     const router = createRouter();
     app.use(router);
@@ -135,16 +140,19 @@ module.exports = class Server {
       }))
 
       // Authentication
-      .get('/api/session', defineEventHandler((event) => {
-        const authenticated = requiresPassword
-          ? !!(event.node.req.session && event.node.req.session.authenticated)
-          : true;
+      .get(
+        '/api/session',
+        defineEventHandler((event: any) => {
+          const authenticated = requiresPassword
+            ? !!(event.node.req.session?.authenticated)
+            : true;
 
-        return {
-          requiresPassword,
-          authenticated,
-        };
-      }))
+          return {
+            requiresPassword,
+            authenticated,
+          };
+        })
+      )
       .get('/cnf/:clientOneTimeLink', defineEventHandler(async (event) => {
         if (WG_ENABLE_ONE_TIME_LINKS === 'false') {
           throw createError({
@@ -153,49 +161,54 @@ module.exports = class Server {
           });
         }
         const clientOneTimeLink = getRouterParam(event, 'clientOneTimeLink');
-        const clients = await WireGuard.getClients();
+        const clients = await wireGuard.getClients();
         const client = clients.find((client) => client.oneTimeLink === clientOneTimeLink);
         if (!client) return;
         const clientId = client.id;
-        const config = await WireGuard.getClientConfiguration({ clientId });
-        await WireGuard.eraseOneTimeLink({ clientId });
+        const config = await wireGuard.getClientConfiguration({ clientId });
+        await wireGuard.eraseOneTimeLink({ clientId });
         setHeader(event, 'Content-Disposition', `attachment; filename="${clientOneTimeLink}.conf"`);
         setHeader(event, 'Content-Type', 'text/plain');
         return config;
       }))
-      .post('/api/session', defineEventHandler(async (event) => {
-        const { password, remember } = await readBody(event);
+      .post(
+        '/api/session',
+        defineEventHandler(async (event: any) => {
+          const { password, remember } = await readBody<{
+            password: string;
+            remember: boolean;
+          }>(event);
 
-        if (!requiresPassword) {
-          // if no password is required, the API should never be called.
-          // Do not automatically authenticate the user.
-          throw createError({
-            status: 401,
-            message: 'Invalid state',
-          });
-        }
+          if (!requiresPassword) {
+            throw createError({
+              status: 401,
+              message: 'Invalid state',
+            });
+          }
 
-        if (!isPasswordValid(password, PASSWORD_HASH)) {
-          throw createError({
-            status: 401,
-            message: 'Incorrect Password',
-          });
-        }
+          // @ts-ignore
+          if (!isPasswordValid(password, PASSWORD_HASH)) {
+            throw createError({
+              status: 401,
+              message: 'Incorrect Password',
+            });
+          }
 
-        if (MAX_AGE && remember) {
-          event.node.req.session.cookie.maxAge = MAX_AGE;
-        }
-        event.node.req.session.authenticated = true;
-        event.node.req.session.save();
+          if (MAX_AGE && remember) {
+            event.node.req.session.cookie.maxAge = MAX_AGE;
+          }
+          event.node.req.session.authenticated = true;
+          event.node.req.session.save();
 
-        debug(`New Session: ${event.node.req.session.id}`);
+          log(`New Session: ${event.node.req.session.id}`);
 
-        return { success: true };
-      }));
+          return { success: true };
+        })
+      );
 
-    // WireGuard
     app.use(
-      fromNodeMiddleware((req, res, next) => {
+      fromNodeMiddleware((req: any, res: any, next: (err?: any) => void) => {
+        // @ts-ignore
         if (!requiresPassword || !req.url.startsWith('/api/')) {
           return next();
         }
@@ -205,6 +218,7 @@ module.exports = class Server {
         }
 
         if (req.url.startsWith('/api/') && req.headers['authorization']) {
+          // @ts-ignore
           if (isPasswordValid(req.headers['authorization'], PASSWORD_HASH)) {
             return next();
           }
@@ -223,27 +237,30 @@ module.exports = class Server {
     app.use(router2);
 
     router2
-      .delete('/api/session', defineEventHandler((event) => {
+      .delete('/api/session', defineEventHandler((event: any) => {
         const sessionId = event.node.req.session.id;
 
-        event.node.req.session.destroy();
+        event.node.req.session.destroy(() => {
+        });
 
         debug(`Deleted Session: ${sessionId}`);
-        return { success: true };
+        return {success: true};
       }))
       .get('/api/wireguard/client', defineEventHandler(() => {
-        return WireGuard.getClients();
+        return wireGuard.getClients();
       }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId });
+        if (!clientId) throw createError({ status: 400 });
+        const svg = await wireGuard.getClientQRCodeSVG({ clientId });
         setHeader(event, 'Content-Type', 'image/svg+xml');
         return svg;
       }))
       .get('/api/wireguard/client/:clientId/configuration', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const client = await WireGuard.getClient({ clientId });
-        const config = await WireGuard.getClientConfiguration({ clientId });
+        if (!clientId) throw createError({ status: 400 });
+        const client = await wireGuard.getClient({ clientId });
+        const config = await wireGuard.getClientConfiguration({ clientId });
         const configName = client.name
           .replace(/[^a-zA-Z0-9_=+.-]/g, '-')
           .replace(/(-{2,}|-$)/g, '-')
@@ -256,20 +273,22 @@ module.exports = class Server {
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
         const { name } = await readBody(event);
         const { expiredDate } = await readBody(event);
-        await WireGuard.createClient({ name, expiredDate });
+        await wireGuard.createClient({ name, expiredDate });
         return { success: true };
       }))
       .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        await WireGuard.deleteClient({ clientId });
+        if (!clientId) throw createError({ status: 400 });
+        await wireGuard.deleteClient({ clientId });
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
-        await WireGuard.enableClient({ clientId });
+        await wireGuard.enableClient({ clientId });
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/generateOneTimeLink', defineEventHandler(async (event) => {
@@ -280,49 +299,54 @@ module.exports = class Server {
           });
         }
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
-        await WireGuard.generateOneTimeLink({ clientId });
+        await wireGuard.generateOneTimeLink({ clientId });
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/disable', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
-        await WireGuard.disableClient({ clientId });
+        await wireGuard.disableClient({ clientId });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
         const { name } = await readBody(event);
-        await WireGuard.updateClientName({ clientId, name });
+        await wireGuard.updateClientName({ clientId, name });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
         const { address } = await readBody(event);
-        await WireGuard.updateClientAddress({ clientId, address });
+        await wireGuard.updateClientAddress({ clientId, address });
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/expireDate', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        if (!clientId) throw createError({ status: 400 });
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
         const { expireDate } = await readBody(event);
-        await WireGuard.updateClientExpireDate({ clientId, expireDate });
+        await wireGuard.updateClientExpireDate({ clientId, expireDate });
         return { success: true };
       }));
 
-    const safePathJoin = (base, target) => {
+    const safePathJoin = (base: any, target: any) => {
       // Manage web root (edge case)
       if (target === '/') {
         return `${base}${sep}`;
@@ -348,6 +372,7 @@ module.exports = class Server {
     // Check Prometheus credentials
     app.use(
       fromNodeMiddleware((req, res, next) => {
+        // @ts-ignore
         if (!requiresPrometheusPassword || !req.url.startsWith('/metrics')) {
           return next();
         }
@@ -357,6 +382,7 @@ module.exports = class Server {
           return { error: 'Not Logged In' };
         }
         if (user.pass) {
+          // @ts-ignore
           if (isPasswordValid(user.pass, PROMETHEUS_METRICS_PASSWORD)) {
             return next();
           }
@@ -377,14 +403,14 @@ module.exports = class Server {
       .get('/metrics', defineEventHandler(async (event) => {
         setHeader(event, 'Content-Type', 'text/plain');
         if (ENABLE_PROMETHEUS_METRICS === 'true') {
-          return WireGuard.getMetrics();
+          return wireGuard.getMetrics();
         }
         return '';
       }))
       .get('/metrics/json', defineEventHandler(async (event) => {
         setHeader(event, 'Content-Type', 'application/json');
         if (ENABLE_PROMETHEUS_METRICS === 'true') {
-          return WireGuard.getMetricsJSON();
+          return wireGuard.getMetricsJSON();
         }
         return '';
       }));
@@ -395,14 +421,14 @@ module.exports = class Server {
 
     router3
       .get('/api/wireguard/backup', defineEventHandler(async (event) => {
-        const config = await WireGuard.backupConfiguration();
+        const config = await wireGuard.backupConfiguration();
         setHeader(event, 'Content-Disposition', 'attachment; filename="wg0.json"');
         setHeader(event, 'Content-Type', 'text/json');
         return config;
       }))
       .put('/api/wireguard/restore', defineEventHandler(async (event) => {
         const { file } = await readBody(event);
-        await WireGuard.restoreConfiguration(file);
+        await wireGuard.restoreConfiguration(file);
         return { success: true };
       }));
 
@@ -438,6 +464,7 @@ module.exports = class Server {
       }),
     );
 
+    // @ts-ignore
     createServer(toNodeListener(app)).listen(PORT, WEBUI_HOST);
     debug(`Listening on http://${WEBUI_HOST}:${PORT}`);
 

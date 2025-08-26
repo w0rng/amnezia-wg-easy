@@ -17,7 +17,7 @@ module.exports = {
     },
   },
   plugins: [
-    function addDisabledClass({ addUtilities }) {
+    function addDisabledClass({ addUtilities }: { addUtilities: any}) {
       const newUtilities = {
         '.is-disabled': {
           opacity: '0.25',

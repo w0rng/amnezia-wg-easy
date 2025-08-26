@@ -4,7 +4,7 @@ volumes:
 services:
   amnezia-wg-easy:
     env_file:
-      - .env
+      - src/.env
     image: ghcr.io/w0rng/amnezia-wg-easy
     container_name: amnezia-wg-easy
     volumes:

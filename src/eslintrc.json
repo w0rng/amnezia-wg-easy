@@ -1,0 +1,21 @@
+{
+  "extends": "airbnb-typescript/base",
+  "ignorePatterns": [
+    "**/vendor/*.js"
+  ],
+  "rules": {
+    "consistent-return": "off",
+    "no-shadow": "off",
+    "max-len": "off",
+    "import/extensions": ["error", "ignorePackages", {
+      "ts": "never",
+      "js": "never"
+    }],
+    "node/no-missing-import": "off"
+  },
+  "settings": {
+    "import/resolver": {
+      "typescript": {}          // потребует eslint-import-resolver-typescript
+    }
+  }
+}

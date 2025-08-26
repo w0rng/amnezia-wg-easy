@@ -1,45 +1,51 @@
 'use strict';
 
-const fs = require('node:fs/promises');
-const path = require('path');
-const debug = require('debug')('WireGuard');
-const crypto = require('node:crypto');
-const QRCode = require('qrcode');
-const CRC32 = require('crc-32');
+import * as fs from 'node:fs/promises';
+import * as path from 'path';
+import debugLib from 'debug';
+import * as crypto from 'node:crypto';
+import QRCode from 'qrcode';
+import * as CRC32 from 'crc-32';
 
-const Util = require('./Util');
-const ServerError = require('./ServerError');
+import Util from './Util';
+import ServerError from './ServerError';
 
-const {
-  WG_PATH,
-  WG_HOST,
-  WG_PORT,
-  WG_CONFIG_PORT,
-  WG_MTU,
-  WG_DEFAULT_DNS,
-  WG_DEFAULT_ADDRESS,
-  WG_PERSISTENT_KEEPALIVE,
-  WG_ALLOWED_IPS,
-  WG_PRE_UP,
-  WG_POST_UP,
-  WG_PRE_DOWN,
-  WG_POST_DOWN,
-  WG_ENABLE_EXPIRES_TIME,
-  WG_ENABLE_ONE_TIME_LINKS,
-  JC,
-  JMIN,
-  JMAX,
-  S1,
-  S2,
+import {
   H1,
   H2,
   H3,
   H4,
-} = require('../config');
+  JC,
+  JMAX,
+  JMIN,
+  S1,
+  S2,
+  WG_ALLOWED_IPS,
+  WG_CONFIG_PORT,
+  WG_DEFAULT_ADDRESS,
+  WG_DEFAULT_DNS,
+  WG_ENABLE_EXPIRES_TIME,
+  WG_ENABLE_ONE_TIME_LINKS,
+  WG_HOST,
+  WG_MTU,
+  WG_PATH,
+  WG_PERSISTENT_KEEPALIVE,
+  WG_PORT,
+  WG_POST_DOWN,
+  WG_POST_UP,
+  WG_PRE_DOWN,
+  WG_PRE_UP,
+} from '@/config'
+import {ClientConfig, ClientListItem, WireGuardConfig} from "@/types/WireGuard";
+import * as console from "node:console";
 
-module.exports = class WireGuard {
+const debug = debugLib('WireGuard');
 
-  async __buildConfig() {
+export default class WireGuard {
+
+  private __configPromise: Promise<WireGuardConfig> | undefined;
+
+  public async __buildConfig(): Promise<WireGuardConfig> {
     this.__configPromise = Promise.resolve().then(async () => {
       if (!WG_HOST) {
         throw new Error('WG_HOST Environment Variable Not Set!');
@@ -78,42 +84,90 @@ module.exports = class WireGuard {
         debug('Configuration generated.');
       }
 
-      return config;
+      return config as WireGuardConfig;
     });
 
     return this.__configPromise;
   }
 
-  async getConfig() {
+  public async getConfig(): Promise<WireGuardConfig | undefined> {
+    console.log('Starting getting configuration.')
     if (!this.__configPromise) {
-      const config = await this.__buildConfig();
+      console.log('Existing configuration not found, starting config building.')
+      const config: WireGuardConfig = await this.__buildConfig();
 
       await this.__saveConfig(config);
-      await Util.exec('wg-quick down wg0').catch(() => {});
-      await Util.exec('wg-quick up wg0').catch((err) => {
-        if (err && err.message && err.message.includes('Cannot find device "wg0"')) {
-          throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
-        }
 
-        throw err;
-      });
-      // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS.replace('x', '0')}/24 -o ' + WG_DEVICE + ' -j MASQUERADE`);
-      // await Util.exec('iptables -A INPUT -p udp -m udp --dport 51820 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
-      await this.__syncConfig();
+      let wgStarted = false;
+      // Optionally control whether to bring the interface up automatically
+      if (process.env.WG_AUTO_START !== 'false') {
+        // Only bring the interface down if it actually exists to avoid noisy logs on first start
+        let ifaceExists = false;
+        await Util.exec('wg show wg0').then((stdout) => {
+          if (stdout.includes('Interface: wg0'))
+          ifaceExists = true;
+        }).catch(() => {
+          return
+        });
+        if (ifaceExists) {
+          await Util.exec('wg-quick down wg0').catch(() => {
+          });
+        }
+        await Util.exec('wg-quick up wg0').then(() => {
+          wgStarted = true;
+        }).catch((err) => {
+          const msg = err && err.message ? String(err.message) : '';
+          const missingKernel = msg.includes('Cannot find device "wg0"');
+          if (missingKernel) {
+            const allowNoKernel = (process.env.WG_ALLOW_NO_KERNEL ?? 'true') !== 'false';
+            if (allowNoKernel) {
+              debug('WireGuard kernel/module not available; continuing without interface. Set WG_ALLOW_NO_KERNEL=false to make this a fatal error.');
+              return; // continue without throwing
+            }
+            throw new Error('WireGuard exited with the error: Cannot find device "wg0"\nThis usually means that your host\'s kernel does not support WireGuard!');
+          }
+          // rethrow other errors
+          throw err;
+        });
+      } else {
+        debug('WG_AUTO_START=false; skipping wg-quick up/down.');
+      }
+
+      // Only sync runtime config if interface is up
+      if (wgStarted) {
+        // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS.replace('x', '0')}/24 -o ' + WG_DEVICE + ' -j MASQUERADE`);
+        // await Util.exec('iptables -A INPUT -p udp -m udp --dport 51820 -j ACCEPT');
+        // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
+        // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
+        await this.__syncConfig();
+      } else {
+        debug('Skipping __syncConfig because wg0 is not up.');
+      }
     }
 
     return this.__configPromise;
   }
 
-  async saveConfig() {
+  public async saveConfig() {
     const config = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
     await this.__saveConfig(config);
-    await this.__syncConfig();
+
+    // Only attempt to sync when the interface is up
+    let ifaceUp = false;
+    await Util.exec('wg show wg0').then(() => {
+      ifaceUp = true;
+    }).catch(() => {
+    });
+
+    if (ifaceUp) {
+      await this.__syncConfig();
+    } else {
+      debug('Skipping __syncConfig in saveConfig because wg0 is not up.');
+    }
   }
 
-  async __saveConfig(config) {
+  async __saveConfig(config: WireGuardConfig) {
     let result = `
 # Note: Do not edit this file directly.
 # Your changes will be overwritten!
@@ -147,11 +201,13 @@ H4 = ${config.server.h4}
 [Peer]
 PublicKey = ${client.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${client.address}/32`;
+      }AllowedIPs = ${client.address}/32`;
     }
 
     debug('Config saving...');
-    await fs.writeFile(path.join(WG_PATH, 'wg0.json'), JSON.stringify(config, false, 2), {
+    // Ensure configuration directory exists before saving
+    await fs.mkdir(WG_PATH, {recursive: true});
+    await fs.writeFile(path.join(WG_PATH, 'wg0.json'), JSON.stringify(config, null, 2), {
       mode: 0o660,
     });
     await fs.writeFile(path.join(WG_PATH, 'wg0.conf'), result, {
@@ -166,9 +222,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     debug('Config synced.');
   }
 
-  async getClients() {
-    const config = await this.getConfig();
-    const clients = Object.entries(config.clients).map(([clientId, client]) => ({
+  public async getClients() {
+    const config: WireGuardConfig | undefined = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
+    const clients: ClientListItem[] = (Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
       name: client.name,
       enabled: client.enabled,
@@ -188,12 +245,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       transferRx: null,
       transferTx: null,
       endpoint: null,
-    }));
+    }))) as ClientListItem[];
 
     // Loop WireGuard status
-    const dump = await Util.exec('wg show wg0 dump', {
-      log: false,
-    });
+    const dump = await Util.exec('wg show wg0 dump');
     dump
       .trim()
       .split('\n')
@@ -210,7 +265,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
           persistentKeepalive,
         ] = line.split('\t');
 
-        const client = clients.find((client) => client.publicKey === publicKey);
+        const client = clients.find((client: ClientListItem) => client.publicKey === publicKey);
         if (!client) return;
 
         client.latestHandshakeAt = latestHandshakeAt === '0'
@@ -225,9 +280,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return clients;
   }
 
-  async getClient({ clientId }) {
-    const config = await this.getConfig();
-    const client = config.clients[clientId];
+  public async getClient({clientId}: { clientId: string }) {
+    const config: WireGuardConfig | undefined = await this.getConfig()
+    if (!config) throw new Error('Config not found.');
+    const client: ClientConfig = config.clients[clientId];
     if (!client) {
       throw new ServerError(`Client Not Found: ${clientId}`, 404);
     }
@@ -235,9 +291,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return client;
   }
 
-  async getClientConfiguration({ clientId }) {
-    const config = await this.getConfig();
-    const client = await this.getClient({ clientId });
+  async getClientConfiguration({clientId}: { clientId: string }) {
+    const config: WireGuardConfig | undefined = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
+    const client = await this.getClient({clientId});
 
     return `
 [Interface]
@@ -258,25 +315,26 @@ H4 = ${config.server.h4}
 [Peer]
 PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${WG_ALLOWED_IPS}
+    }AllowedIPs = ${WG_ALLOWED_IPS}
 PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
 Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
-  async getClientQRCodeSVG({ clientId }) {
-    const config = await this.getClientConfiguration({ clientId });
+  async getClientQRCodeSVG({clientId}: { clientId: string }) {
+    const config = await this.getClientConfiguration({clientId});
     return QRCode.toString(config, {
       type: 'svg',
       width: 512,
     });
   }
 
-  async createClient({ name, expiredDate }) {
+  async createClient({name, expiredDate}: { name: string, expiredDate?: string }) {
     if (!name) {
       throw new Error('Missing: Name');
     }
 
-    const config = await this.getConfig();
+    const config: WireGuardConfig | undefined = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
 
     const privateKey = await Util.exec('wg genkey');
     const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
@@ -288,11 +346,11 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     let address;
     for (let i = 2; i < 255; i++) {
       const client = Object.values(config.clients).find((client) => {
-        return client.address === WG_DEFAULT_ADDRESS.replace('x', i);
+        return client.address === WG_DEFAULT_ADDRESS.replace('x', String(i));
       });
 
       if (!client) {
-        address = WG_DEFAULT_ADDRESS.replace('x', i);
+        address = WG_DEFAULT_ADDRESS.replace('x', String(i));
         break;
       }
     }
@@ -302,7 +360,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     }
     // Create Client
     const id = crypto.randomUUID();
-    const client = {
+    const client: ClientConfig = {
       id,
       name,
       address,
@@ -316,10 +374,11 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       enabled: true,
     };
     if (expiredDate) {
-      client.expiredAt = new Date(expiredDate);
-      client.expiredAt.setHours(23);
-      client.expiredAt.setMinutes(59);
-      client.expiredAt.setSeconds(59);
+      const dt = new Date(expiredDate);
+      dt.setHours(23);
+      dt.setMinutes(59);
+      dt.setSeconds(59);
+      client.expiredAt = dt;
     }
     config.clients[id] = client;
 
@@ -328,8 +387,9 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     return client;
   }
 
-  async deleteClient({ clientId }) {
-    const config = await this.getConfig();
+  async deleteClient({clientId}: { clientId: string }) {
+    const config: WireGuardConfig | undefined = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
 
     if (config.clients[clientId]) {
       delete config.clients[clientId];
@@ -337,8 +397,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     }
   }
 
-  async enableClient({ clientId }) {
-    const client = await this.getClient({ clientId });
+  async enableClient({clientId}: { clientId: string }) {
+    const client = await this.getClient({clientId});
 
     client.enabled = true;
     client.updatedAt = new Date();
@@ -346,8 +406,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async generateOneTimeLink({ clientId }) {
-    const client = await this.getClient({ clientId });
+  async generateOneTimeLink({clientId}: { clientId: string }) {
+    const client = await this.getClient({clientId});
     const key = `${clientId}-${Math.floor(Math.random() * 1000)}`;
     client.oneTimeLink = Math.abs(CRC32.str(key)).toString(16);
     client.oneTimeLinkExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -355,16 +415,16 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async eraseOneTimeLink({ clientId }) {
-    const client = await this.getClient({ clientId });
-    // client.oneTimeLink = null;
-    client.oneTimeLinkExpiresAt = new Date(Date.now() + 10 * 1000);
+  async eraseOneTimeLink({clientId}: { clientId: string }) {
+    const client = await this.getClient({clientId});
+    client.oneTimeLink = null;
+    client.oneTimeLinkExpiresAt = null;
     client.updatedAt = new Date();
     await this.saveConfig();
   }
 
-  async disableClient({ clientId }) {
-    const client = await this.getClient({ clientId });
+  public async disableClient({clientId}: { clientId: string }) {
+    const client = await this.getClient({clientId});
 
     client.enabled = false;
     client.updatedAt = new Date();
@@ -372,8 +432,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async updateClientName({ clientId, name }) {
-    const client = await this.getClient({ clientId });
+  public async updateClientName({clientId, name}: { clientId: string, name: string }) {
+    const client = await this.getClient({clientId});
 
     client.name = name;
     client.updatedAt = new Date();
@@ -381,8 +441,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async updateClientAddress({ clientId, address }) {
-    const client = await this.getClient({ clientId });
+  public async updateClientAddress({clientId, address}: { clientId: string, address: string }) {
+    const client = await this.getClient({clientId});
 
     if (!Util.isValidIPv4(address)) {
       throw new ServerError(`Invalid Address: ${address}`, 400);
@@ -394,8 +454,8 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async updateClientExpireDate({ clientId, expireDate }) {
-    const client = await this.getClient({ clientId });
+  public async updateClientExpireDate({clientId, expireDate}: { clientId: string, expireDate?: string }) {
+    const client = await this.getClient({clientId});
 
     if (expireDate) {
       client.expiredAt = new Date(expireDate);
@@ -410,12 +470,12 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
   }
 
-  async __reloadConfig() {
+  public async __reloadConfig() {
     await this.__buildConfig();
     await this.__syncConfig();
   }
 
-  async restoreConfiguration(config) {
+  public async restoreConfiguration(config: string) {
     debug('Starting configuration restore process.');
     const _config = JSON.parse(config);
     await this.__saveConfig(_config);
@@ -423,7 +483,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     debug('Configuration restore process completed.');
   }
 
-  async backupConfiguration() {
+  public async backupConfiguration() {
     debug('Starting configuration backup.');
     const config = await this.getConfig();
     const backup = JSON.stringify(config, null, 2);
@@ -432,12 +492,14 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   }
 
   // Shutdown wireguard
-  async Shutdown() {
-    await Util.exec('wg-quick down wg0').catch(() => {});
+  public async Shutdown() {
+    await Util.exec('wg-quick down wg0').catch(() => {
+    });
   }
 
-  async cronJobEveryMinute() {
-    const config = await this.getConfig();
+  public async cronJobEveryMinute() {
+    const config: WireGuardConfig | undefined = await this.getConfig();
+    if (!config) throw new Error('Config not found.');
     let needSaveConfig = false;
     // Expires Feature
     if (WG_ENABLE_EXPIRES_TIME === 'true') {
@@ -454,7 +516,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     // One Time Link Feature
     if (WG_ENABLE_ONE_TIME_LINKS === 'true') {
       for (const client of Object.values(config.clients)) {
-        if (client.oneTimeLink !== null && new Date() > new Date(client.oneTimeLinkExpiresAt)) {
+        if (client.oneTimeLink && client.oneTimeLinkExpiresAt && new Date() > new Date(client.oneTimeLinkExpiresAt)) {
           debug(`Client ${client.id} One Time Link expired.`);
           needSaveConfig = true;
           client.oneTimeLink = null;
@@ -468,7 +530,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     }
   }
 
-  async getMetrics() {
+  public async getMetrics() {
     const clients = await this.getClients();
     let wireguardPeerCount = 0;
     let wireguardEnabledPeersCount = 0;
@@ -518,7 +580,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     return returnText;
   }
 
-  async getMetricsJSON() {
+  public async getMetricsJSON() {
     const clients = await this.getClients();
     let wireguardPeerCount = 0;
     let wireguardEnabledPeersCount = 0;

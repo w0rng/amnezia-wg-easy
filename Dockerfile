@@ -1,15 +1,22 @@
 # As a workaround we have to build on nodejs 18
 # nodejs 20 hangs on build with armv6/armv7
-FROM docker.io/library/node:20-alpine AS build_node_modules
+FROM docker.io/library/node:18-alpine AS build_node_modules
 
-# Update npm to latest
-RUN npm install -g npm@latest
+# Update npm to a version compatible with Node 18 (npm 10.x); npm@latest (11.x) requires Node >=20
+RUN npm install -g npm@10
 
 # Copy Web UI
 COPY src /app
 WORKDIR /app
-RUN npm ci --omit=dev &&\
-    mv node_modules /node_modules
+
+# Install all dependencies (including dev) for building
+RUN npm ci
+
+# Build TypeScript to dist
+RUN npm run build
+
+# Optionally prune dev dependencies to reduce size for runtime copy
+RUN npm prune --omit=dev
 
 # Copy build result to a new image.
 # This saves a lot of disk space.
@@ -17,14 +24,6 @@ FROM amneziavpn/amnezia-wg:latest
 HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show | /bin/grep -q interface || exit 1" --interval=1m --timeout=5s --retries=3
 COPY --from=build_node_modules /app /app
 
-# Move node_modules one directory up, so during development
-# we don't have to mount it in a volume.
-# This results in much faster reloading!
-#
-# Also, some node_modules might be native, and
-# the architecture & OS of your development machine might differ
-# than what runs inside of docker.
-COPY --from=build_node_modules /node_modules /node_modules
 
 # Copy the needed wg-password scripts
 COPY --from=build_node_modules /app/wgpw.sh /bin/wgpw
@@ -44,6 +43,9 @@ RUN update-alternatives --install /sbin/iptables iptables /sbin/iptables-legacy 
 # Set Environment
 ENV DEBUG=Server,WireGuard
 
+
+RUN mkdir -p /etc/wireguard && chmod 775 /etc/wireguard
 # Run Web UI
 WORKDIR /app
-CMD ["/usr/bin/dumb-init", "node", "server.js"]
+
+CMD ["/usr/bin/dumb-init", "node", "dist/server.js"]

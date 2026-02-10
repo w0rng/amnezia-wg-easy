@@ -1,4 +1,4 @@
-# AmnewziaWG Easy
+# AmneziaWG Easy
 
 You have found the easiest way to install & manage WireGuard on any Linux host!
 
@@ -132,6 +132,54 @@ docker pull ghcr.io/w0rng/amnezia-wg-easy
 ```
 
 And then run the `docker run -d \ ...` command above again.
+
+## Migration notes for Amnezia Protocol V2
+
+This image is built on top of `amneziavpn/amnezia-wg:latest`, and generated
+configs include Amnezia obfuscation parameters (`JC/JMIN/JMAX`, `S1/S2`,
+`H1/H2/H3/H4`) for server and clients.
+
+Recommended migration flow from older AmneziaWG deployments:
+
+1. Backup `wg0.json` and `wg0.conf` from `~/.amnezia-wg-easy`.
+2. Pull the latest image: `docker pull ghcr.io/w0rng/amnezia-wg-easy`.
+3. Recreate the container with the same volume mount and environment variables.
+4. Re-generate client configs in Web UI, then re-import on client devices.
+5. If legacy `wg0.json` has missing/invalid Amnezia fields, startup now normalizes values and validates required server keys before writing configs.
+6. Legacy configs are migrated to schema version `2` automatically during startup.
+
+## GitHub-only maintenance (no local git)
+
+If you maintain this fork directly on GitHub (without local git):
+
+1. Create a fine-grained GitHub PAT with repository permissions:
+   - `Contents: Read and write`
+   - `Pull requests: Read and write`
+2. Save PAT only as repository secret `TOKEN_PAT`:
+   - `Repository -> Settings -> Secrets and variables -> Actions -> New repository secret`
+3. Run `.github/workflows/agent-update.yml` manually:
+   - `Actions -> Agent Update -> Run workflow`
+   - `target_branch`: `master` (or your working branch)
+   - `commit_message`: message for automated commit
+4. After each update:
+   - rotate/revoke the PAT if it was temporary,
+   - confirm no token values were committed to the repository,
+   - keep all future tokens out of chat and issue comments.
+
+### Quick status checklist
+
+- [ ] PAT is **not** posted in chat/comments.
+- [ ] PAT is stored only in `TOKEN_PAT` Actions secret.
+- [ ] Workflow `Agent Update` was run for the intended branch (or by schedule).
+- [ ] Changes were reviewed and merged via PR.
+
+> Security note: if a PAT is ever posted publicly, revoke it immediately and create a new one.
+
+
+Automation options:
+- Manual run: `Actions -> Agent Update -> Run workflow`
+- Auto run: workflow also runs daily at `03:00 UTC` and can execute commands from `.github/scripts/agent-update.sh`
+- CI: workflow `.github/workflows/ci-tests.yml` runs WireGuard migration tests on push/PR
 
 ## Thanks
 

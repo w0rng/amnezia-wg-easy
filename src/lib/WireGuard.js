@@ -10,6 +10,8 @@ const CRC32 = require('crc-32');
 const Util = require('./Util');
 const ServerError = require('./ServerError');
 
+const CONFIG_SCHEMA_VERSION = 2;
+
 const {
   WG_PATH,
   WG_HOST,
@@ -39,6 +41,113 @@ const {
 
 module.exports = class WireGuard {
 
+  __toInteger(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+
+    if (Number.isNaN(parsed)) {
+      return fallback;
+    }
+
+    return parsed;
+  }
+
+  __normalizeServerConfig(serverConfig = {}) {
+    return {
+      ...serverConfig,
+      jc: this.__toInteger(serverConfig.jc, this.__toInteger(JC, 7)),
+      jmin: this.__toInteger(serverConfig.jmin, this.__toInteger(JMIN, 50)),
+      jmax: this.__toInteger(serverConfig.jmax, this.__toInteger(JMAX, 1000)),
+      s1: this.__toInteger(serverConfig.s1, this.__toInteger(S1, 15)),
+      s2: this.__toInteger(serverConfig.s2, this.__toInteger(S2, 15)),
+      h1: this.__toInteger(serverConfig.h1, this.__toInteger(H1, 1)),
+      h2: this.__toInteger(serverConfig.h2, this.__toInteger(H2, 1)),
+      h3: this.__toInteger(serverConfig.h3, this.__toInteger(H3, 1)),
+      h4: this.__toInteger(serverConfig.h4, this.__toInteger(H4, 1)),
+    };
+  }
+
+  __createDefaultConfig({ privateKey, publicKey, address }) {
+    return {
+      schemaVersion: CONFIG_SCHEMA_VERSION,
+      server: {
+        privateKey,
+        publicKey,
+        address,
+        jc: JC,
+        jmin: JMIN,
+        jmax: JMAX,
+        s1: S1,
+        s2: S2,
+        h1: H1,
+        h2: H2,
+        h3: H3,
+        h4: H4,
+      },
+      clients: {},
+    };
+  }
+
+  __validateBaseServerConfig(serverConfig) {
+    const requiredFields = ['privateKey', 'publicKey', 'address'];
+
+    for (const field of requiredFields) {
+      if (!serverConfig[field]) {
+        throw new Error(`Invalid server config: missing ${field}`);
+      }
+    }
+  }
+
+  __migrateConfig(config = {}) {
+    const migratedConfig = {
+      ...config,
+      schemaVersion: this.__toInteger(config.schemaVersion, 1),
+      clients: config.clients && typeof config.clients === 'object'
+        ? config.clients
+        : {},
+    };
+
+    migratedConfig.server = this.__normalizeServerConfig(config.server);
+    this.__validateBaseServerConfig(migratedConfig.server);
+    this.__validateAmneziaServerConfig(migratedConfig.server);
+
+    if (migratedConfig.schemaVersion < CONFIG_SCHEMA_VERSION) {
+      migratedConfig.schemaVersion = CONFIG_SCHEMA_VERSION;
+    }
+
+    return migratedConfig;
+  }
+
+  __validateAmneziaServerConfig(serverConfig) {
+    const maxHeader = 2_147_483_647;
+    const constraints = {
+      jc: { min: 1, max: 128 },
+      jmin: { min: 1, max: 1500 },
+      jmax: { min: 1, max: 1500 },
+      s1: { min: 1, max: 1500 },
+      s2: { min: 1, max: 1500 },
+      h1: { min: 1, max: maxHeader },
+      h2: { min: 1, max: maxHeader },
+      h3: { min: 1, max: maxHeader },
+      h4: { min: 1, max: maxHeader },
+    };
+
+    for (const [name, limits] of Object.entries(constraints)) {
+      const value = serverConfig[name];
+
+      if (!Number.isInteger(value)) {
+        throw new Error(`Invalid server config: ${name} must be an integer`);
+      }
+
+      if (value < limits.min || value > limits.max) {
+        throw new Error(`Invalid server config: ${name} must be between ${limits.min} and ${limits.max}`);
+      }
+    }
+
+    if (serverConfig.jmin > serverConfig.jmax) {
+      throw new Error('Invalid server config: jmin must be less than or equal to jmax');
+    }
+  }
+
   async __buildConfig() {
     this.__configPromise = Promise.resolve().then(async () => {
       if (!WG_HOST) {
@@ -58,27 +167,15 @@ module.exports = class WireGuard {
         });
         const address = WG_DEFAULT_ADDRESS.replace('x', '1');
 
-        config = {
-          server: {
-            privateKey,
-            publicKey,
-            address,
-            jc: JC,
-            jmin: JMIN,
-            jmax: JMAX,
-            s1: S1,
-            s2: S2,
-            h1: H1,
-            h2: H2,
-            h3: H3,
-            h4: H4,
-          },
-          clients: {},
-        };
+        config = this.__createDefaultConfig({
+          privateKey,
+          publicKey,
+          address,
+        });
         debug('Configuration generated.');
       }
 
-      return config;
+      return this.__migrateConfig(config);
     });
 
     return this.__configPromise;

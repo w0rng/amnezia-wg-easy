@@ -1,0 +1,94 @@
+name: Agent Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to update"
+        required: true
+        default: "master"
+      commit_message:
+        description: "Commit message for automated changes"
+        required: true
+        default: "chore: automated update"
+      update_commands:
+        description: "Shell commands to run before commit (optional)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GH_PAT: ${{ secrets.TOKEN_PAT }}
+      TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
+      COMMIT_MESSAGE: ${{ github.event.inputs.commit_message }}
+      REPO: ${{ github.repository }}
+
+    steps:
+      - name: Resolve runtime defaults
+        run: |
+          if [ -z "${TARGET_BRANCH}" ]; then
+            echo "TARGET_BRANCH=master" >> "$GITHUB_ENV"
+          fi
+          if [ -z "${COMMIT_MESSAGE}" ]; then
+            echo "COMMIT_MESSAGE=chore: automated update" >> "$GITHUB_ENV"
+          fi
+
+      - name: Validate required secret
+        run: |
+          if [ -z "${GH_PAT}" ]; then
+            echo "Missing required secret: TOKEN_PAT"
+            exit 1
+          fi
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ env.GH_PAT }}
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Set authenticated remote URL
+        run: |
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${REPO}.git"
+
+      - name: Run update commands
+        run: |
+          if [ -n "${{ github.event.inputs.update_commands }}" ]; then
+            echo "Running commands from workflow input"
+            bash -lc "${{ github.event.inputs.update_commands }}"
+          elif [ -f .github/scripts/agent-update.sh ]; then
+            echo "Running .github/scripts/agent-update.sh"
+            bash .github/scripts/agent-update.sh
+          else
+            echo "No update commands provided and no .github/scripts/agent-update.sh found."
+          fi
+
+      - name: Commit changes
+        id: commit
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git add -A
+          git commit -m "${COMMIT_MESSAGE}"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push changes
+        if: steps.commit.outputs.has_changes == 'true'
+        run: |
+          git push origin "HEAD:${TARGET_BRANCH}"

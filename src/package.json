@@ -10,7 +10,8 @@
     "serve": "DEBUG=Server,WireGuard npx nodemon server.js",
     "serve-with-password": "PASSWORD=wg npm run serve",
     "lint": "eslint .",
-    "buildcss": "npx tailwindcss -i ./www/src/css/app.css -o ./www/css/app.css"
+    "buildcss": "npx tailwindcss -i ./www/src/css/app.css -o ./www/css/app.css",
+    "test": "node --test lib/WireGuard.test.js"
   },
   "author": "Emile Nijssen",
   "license": "CC BY-NC-SA 4.0",

@@ -39,6 +39,66 @@ const {
 
 module.exports = class WireGuard {
 
+  __toInteger(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+
+    if (Number.isNaN(parsed)) {
+      return fallback;
+    }
+
+    return parsed;
+  }
+
+  __normalizeServerConfig(serverConfig = {}) {
+    return {
+      ...serverConfig,
+      jc: this.__toInteger(serverConfig.jc, this.__toInteger(JC, 7)),
+      jmin: this.__toInteger(serverConfig.jmin, this.__toInteger(JMIN, 50)),
+      jmax: this.__toInteger(serverConfig.jmax, this.__toInteger(JMAX, 1000)),
+      s1: this.__toInteger(serverConfig.s1, this.__toInteger(S1, 15)),
+      s2: this.__toInteger(serverConfig.s2, this.__toInteger(S2, 15)),
+      h1: this.__toInteger(serverConfig.h1, this.__toInteger(H1, 1)),
+      h2: this.__toInteger(serverConfig.h2, this.__toInteger(H2, 1)),
+      h3: this.__toInteger(serverConfig.h3, this.__toInteger(H3, 1)),
+      h4: this.__toInteger(serverConfig.h4, this.__toInteger(H4, 1)),
+    };
+  }
+
+  __validateAmneziaServerConfig(serverConfig) {
+    const entries = [
+      ['jc', serverConfig.jc],
+      ['jmin', serverConfig.jmin],
+      ['jmax', serverConfig.jmax],
+      ['s1', serverConfig.s1],
+      ['s2', serverConfig.s2],
+      ['h1', serverConfig.h1],
+      ['h2', serverConfig.h2],
+      ['h3', serverConfig.h3],
+      ['h4', serverConfig.h4],
+    ];
+
+    for (const [name, value] of entries) {
+      if (!Number.isInteger(value)) {
+        throw new Error(`Invalid server config: ${name} must be an integer`);
+      }
+
+      if (value < 1) {
+        throw new Error(`Invalid server config: ${name} must be >= 1`);
+      }
+    }
+
+    if (serverConfig.jmin > serverConfig.jmax) {
+      throw new Error('Invalid server config: jmin must be less than or equal to jmax');
+    }
+
+    const maxHeader = 2_147_483_647;
+    for (const [name, value] of entries.filter(([name]) => name.startsWith('h'))) {
+      if (value > maxHeader) {
+        throw new Error(`Invalid server config: ${name} must be <= ${maxHeader}`);
+      }
+    }
+  }
+
   async __buildConfig() {
     this.__configPromise = Promise.resolve().then(async () => {
       if (!WG_HOST) {
@@ -77,6 +137,9 @@ module.exports = class WireGuard {
         };
         debug('Configuration generated.');
       }
+
+      config.server = this.__normalizeServerConfig(config.server);
+      this.__validateAmneziaServerConfig(config.server);
 
       return config;
     });

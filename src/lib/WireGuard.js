@@ -37,6 +37,13 @@ const {
   H4,
 } = require('../config');
 
+// Инициализация новых параметров из переменных окружения
+const I1 = process.env.I1 || '';
+const I2 = process.env.I2 || '';
+const I3 = process.env.I3 || '';
+const I4 = process.env.I4 || '';
+const I5 = process.env.I5 || '';
+
 module.exports = class WireGuard {
 
   async __buildConfig() {
@@ -50,6 +57,15 @@ module.exports = class WireGuard {
       try {
         config = await fs.readFile(path.join(WG_PATH, 'wg0.json'), 'utf8');
         config = JSON.parse(config);
+        
+        // Принудительно обновляем I1-I5 из ENV при каждом запуске, 
+        // чтобы не приходилось удалять wg0.json при смене параметров
+        config.server.i1 = I1;
+        config.server.i2 = I2;
+        config.server.i3 = I3;
+        config.server.i4 = I4;
+        config.server.i5 = I5;
+
         debug('Configuration loaded.');
       } catch (err) {
         const privateKey = await Util.exec('wg genkey');
@@ -72,6 +88,11 @@ module.exports = class WireGuard {
             h2: H2,
             h3: H3,
             h4: H4,
+            i1: I1,
+            i2: I2,
+            i3: I3,
+            i4: I4,
+            i5: I5,
           },
           clients: {},
         };
@@ -97,10 +118,6 @@ module.exports = class WireGuard {
 
         throw err;
       });
-      // await Util.exec(`iptables -t nat -A POSTROUTING -s ${WG_DEFAULT_ADDRESS.replace('x', '0')}/24 -o ' + WG_DEVICE + ' -j MASQUERADE`);
-      // await Util.exec('iptables -A INPUT -p udp -m udp --dport 51820 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
-      // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
       await this.__syncConfig();
     }
 
@@ -190,7 +207,6 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       endpoint: null,
     }));
 
-    // Loop WireGuard status
     const dump = await Util.exec('wg show wg0 dump', {
       log: false,
     });
@@ -201,9 +217,9 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       .forEach((line) => {
         const [
           publicKey,
-          preSharedKey, // eslint-disable-line no-unused-vars
-          endpoint, // eslint-disable-line no-unused-vars
-          allowedIps, // eslint-disable-line no-unused-vars
+          preSharedKey, 
+          endpoint, 
+          allowedIps, 
           latestHandshakeAt,
           transferRx,
           transferTx,
@@ -254,6 +270,11 @@ H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
 H4 = ${config.server.h4}
+${config.server.i1 ? `I1 = ${config.server.i1}\n` : ''}\
+${config.server.i2 ? `I2 = ${config.server.i2}\n` : ''}\
+${config.server.i3 ? `I3 = ${config.server.i3}\n` : ''}\
+${config.server.i4 ? `I4 = ${config.server.i4}\n` : ''}\
+${config.server.i5 ? `I5 = ${config.server.i5}\n` : ''}\
 
 [Peer]
 PublicKey = ${config.server.publicKey}
@@ -284,7 +305,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     });
     const preSharedKey = await Util.exec('wg genpsk');
 
-    // Calculate next IP
     let address;
     for (let i = 2; i < 255; i++) {
       const client = Object.values(config.clients).find((client) => {
@@ -300,7 +320,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     if (!address) {
       throw new Error('Maximum number of clients reached.');
     }
-    // Create Client
     const id = crypto.randomUUID();
     const client = {
       id,
@@ -357,7 +376,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
 
   async eraseOneTimeLink({ clientId }) {
     const client = await this.getClient({ clientId });
-    // client.oneTimeLink = null;
     client.oneTimeLinkExpiresAt = new Date(Date.now() + 10 * 1000);
     client.updatedAt = new Date();
     await this.saveConfig();
@@ -431,7 +449,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     return backup;
   }
 
-  // Shutdown wireguard
   async Shutdown() {
     await Util.exec('wg-quick down wg0').catch(() => {});
   }
@@ -439,7 +456,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   async cronJobEveryMinute() {
     const config = await this.getConfig();
     let needSaveConfig = false;
-    // Expires Feature
     if (WG_ENABLE_EXPIRES_TIME === 'true') {
       for (const client of Object.values(config.clients)) {
         if (client.enabled !== true) continue;
@@ -451,7 +467,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
         }
       }
     }
-    // One Time Link Feature
     if (WG_ENABLE_ONE_TIME_LINKS === 'true') {
       for (const client of Object.values(config.clients)) {
         if (client.oneTimeLink !== null && new Date() > new Date(client.oneTimeLinkExpiresAt)) {
